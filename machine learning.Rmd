@@ -1,0 +1,180 @@
+---
+title: "Practical Machine Learning Assignment. Data Science Specialization"
+author: "Eduardo Bravo"
+date: "21st July, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, my goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise. This is the "classe" variable in the training set.
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Preparing the environment
+
+Here we will load all the required libraries for the analysis and set the working directory.
+
+```{r message=FALSE, warning=FALSE}
+setwd('E:/Programming/Practical-Machine-Learning-Assignment')
+library(caret, quietly = TRUE)
+library(ggplot2, quietly = TRUE)
+library(randomForest, quietly = TRUE)
+library(doParallel, quietly = TRUE)
+library(gbm, quietly = TRUE)
+```
+
+
+
+## Loading Data 
+
+We load the data for the exercise. 
+
+```{r}
+trainURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+testURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+        
+trainDF <- read.csv(url(trainURL), header = TRUE)
+testDF <- read.csv(url(testURL), header = TRUE)
+```
+
+
+
+## Basic Exploration
+
+Before we create the validation set we have a quick look at the dataset and it has `r dim(trainDF)[2]` variables with `r dim(trainDF)[1]` observations on each one. This is a very large df, it would be necessary to reduce some variables. In the Appendix I can be seen that there are a lot of NAs and variables that are IDs. Also, we will withdraw those with very little variance to reduce the dimensions of our study df.
+
+## Number of Variables Reduction
+
+```{r}
+# deleting those variables with very low variance
+reducedVar <- nearZeroVar(trainDF)
+trainDF <- trainDF[,-reducedVar]
+
+# deleting those variables with more than a 90% of NAs within their observations
+for (i in 1:length(trainDF)) {
+        if (mean(is.na(trainDF)[,i]) > 0.9) {
+                colnames(trainDF)[i] <- paste(colnames(trainDF[i]), 'NAs', sep = '-')
+        }
+}
+trainDF <- trainDF[grep("-NAs", colnames(trainDF), invert = TRUE)]
+
+# Deleting the first 5 variables that are indexes 
+trainDF <- trainDF[,6:length(trainDF)]
+dim(trainDF)
+```
+
+The new number of variables is `r dim(trainDF)[2]`
+
+## Model Selection
+
+First, even though we have a testing df with the final 20 observations to test, we will split the training set into train and validation sets so we can compare different models before actually applying the model to those 20 obs.
+
+```{r}
+inTrain  <- createDataPartition(trainDF$classe, p=0.7, list=FALSE)
+trainSubset <- trainDF[inTrain, ]
+testSubset  <- trainDF[-inTrain, ]
+```
+ 
+Now we'll use the main different models to predict a categorycal variable with more than two categories. Plots, final models and confusio Matrixes in detail can be seen in Appendix II.
+ 
+```{r}
+#RANDOM FOREST: Model building
+set.seed(666)
+modelRF <- train(classe ~ ., 
+                 data=trainSubset, 
+                 method="rf", 
+                 trControl=trainControl(method="cv", 
+                                        number=5, 
+                                        verboseIter=FALSE)
+                 )
+
+
+# RANDOM FOREST: Prediction on TestSubset
+predictRF <- predict(modelRF, newdata=testSubset)
+confusionMatrixRF <- confusionMatrix(predictRF, testSubset$classe)
+print('RANDOM FOREST')
+confusionMatrixRF$overall
+
+# NEURAL NETWORK: Model building
+
+registerDoParallel(cores = 2)
+modelNNET <- train(classe ~ ., 
+                   data = trainSubset, 
+                   method = 'nnet', 
+                   preProcess = c('center', 'scale'), 
+                   trControl = trainControl(method = 'cv', 
+                                            number = 10, 
+                                            classProbs = TRUE, 
+                                            verboseIter = FALSE, 
+                                            preProcOptions = list(thresh = 0.75, 
+                                                                  ICAcomp = 3, 
+                                                                  k = 5)), 
+                   tuneGrid=expand.grid(size=c(10), 
+                                        decay=c(0.1)
+                                        )
+                   )
+
+# NEURAL NETWORK: Prediction on TestSubset
+predictNNET <- predict(modelNNET, newdata=testSubset)
+confusionMatrixNNET <- confusionMatrix(predictNNET, testSubset$classe)
+print('NEURAL NETWORK')
+confusionMatrixNNET$overall
+
+# BOOSTING: Model building
+set.seed(666)
+modelBOOST  <- train(classe ~ ., 
+                     data=trainSubset, 
+                     method = "gbm",
+                     trControl = trainControl(method = "repeatedcv", 
+                                              number = 3, 
+                                              repeats = 2), 
+                     verbose = FALSE)
+
+# BOOSTING: Prediction on TestSubset
+predictBOOST <- predict(modelBOOST, newdata=testSubset)
+confusionMatrixBOOST <- confusionMatrix(predictBOOST, testSubset$classe)
+print('BOOSTING')
+confusionMatrixBOOST$overall
+```
+As can be seen, the random forest model is the one with higher accuracy with a `r confusionMatrixRF$overall[1]`. We will use this model to predict the final test set.
+
+```{r}
+predictTestRF <- predict(modelRF, newdata=testDF)
+predictTestRF
+```
+
+## Appendixes
+
+### Appendix I
+```{r}
+str(trainDF)
+summary(trainDF)
+```
+
+### Appendix II
+```{r}
+#RANDOM FOREST
+
+print('RANDOM FOREST')
+modelRF$finalModel
+confusionMatrixRF
+plot(modelRF)
+
+# NEURAL NETWORK
+
+print('NEURAL NETWORK')
+modelNNET$finalModel
+confusionMatrixNNET
+
+# BOOSTING
+
+print('BOOSTING')
+modelBOOST$finalModel
+confusionMatrixBOOST
+plot(modelBOOST)
+```
